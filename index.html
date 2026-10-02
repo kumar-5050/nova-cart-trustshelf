@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src data:">
+<title>TrustShelf – NOVA CART Availability Trust Engine</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f6f7fb;--fg:#14171f;--card:#fff;--mut:#4a5163;--bd:#d5d9e4;--ac:#0b5fff;--acfg:#fff;--ok:#0a6b3a;--warn:#8a5a00;--bad:#a4161a;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e1118;--fg:#eef0f6;--card:#181c27;--mut:#aab1c4;--bd:#2d3447;--ac:#6ea0ff;--acfg:#0b1020;--ok:#5fd592;--warn:#f3be5b;--bad:#ff8a8d}}
+:root[data-theme="dark"]{--bg:#0e1118;--fg:#eef0f6;--card:#181c27;--mut:#aab1c4;--bd:#2d3447;--ac:#6ea0ff;--acfg:#0b1020;--ok:#5fd592;--warn:#f3be5b;--bad:#ff8a8d}
+*{box-sizing:border-box}html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 Inter,system-ui,sans-serif}
+.skip{position:absolute;left:-999px}.skip:focus{left:8px;top:8px;background:var(--ac);color:var(--acfg);padding:8px;z-index:9}
+header,main{max-width:980px;margin:auto;padding:12px 16px}
+h1{font-size:1.4rem;margin:.2rem 0}h2{font-size:1.15rem}p{margin:.4rem 0}
+nav{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}
+button,input{font:inherit;color:inherit}
+button{min-height:44px;padding:6px 14px;border:2px solid var(--bd);background:var(--card);border-radius:10px;cursor:pointer}
+button[aria-current="page"],button.pri{background:var(--ac);color:var(--acfg);border-color:var(--ac)}
+button:disabled{opacity:.55;cursor:not-allowed}
+:focus-visible{outline:3px solid var(--ac);outline-offset:2px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin:10px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.kpi{font-size:1.6rem;font-weight:700}.mut{color:var(--mut);font-size:.92rem}
+.badge{display:inline-block;padding:2px 10px;border-radius:99px;border:2px solid;font-weight:600;font-size:.88rem}
+.b-ok{color:var(--ok)}.b-warn{color:var(--warn)}.b-bad{color:var(--bad)}
+.bar{height:10px;background:var(--bd);border-radius:6px;overflow:hidden}.bar i{display:block;height:100%;background:var(--ac)}
+input[type=number]{width:84px;min-height:44px;padding:4px 8px;border:2px solid var(--bd);border-radius:8px;background:var(--card)}
+input[type=range]{width:100%;min-height:32px}
+table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--bd);padding:6px;text-align:left}
+.pass{color:var(--ok)}.fail{color:var(--bad)}
+[hidden]{display:none!important}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style></head><body>
+<a class="skip" href="#main">Skip to content</a>
+<header>
+<h1>TrustShelf <span class="mut">for NOVA CART</span></h1>
+<p class="mut">An availability-trust engine: show only what stores can really deliver, and make store updates a 5-second tap.</p>
+<nav id="nav" aria-label="Sections"></nav>
+<div class="row"><button id="ff" type="button">⏩ Fast-forward 3 hours</button><button id="reset" type="button">Reset demo</button><span id="tests-badge" class="badge" role="status"></span></div>
+</header>
+<main id="main" tabindex="-1">
+<section id="s-diag" aria-labelledby="h-diag"></section>
+<section id="s-store" aria-labelledby="h-store" hidden></section>
+<section id="s-cust" aria-labelledby="h-cust" hidden></section>
+<section id="s-impact" aria-labelledby="h-impact" hidden></section>
+<section id="s-tests" aria-labelledby="h-tests" hidden></section>
+<p id="live" class="mut" role="status" aria-live="polite"></p>
+</main>
+<script>
+"use strict";
+/* ===== Pure business logic (no DOM) ===== */
+const Core = {
+  clamp: (n, lo, hi) => Math.min(hi, Math.max(lo, n)),
+  toInt(v, lo = 0, hi = 999) { const n = Math.floor(Number(v)); return Number.isFinite(n) ? Core.clamp(n, lo, hi) : lo; },
+  /* Availability confidence 0-100: stock left after expected sales since last confirmation, discounted by staleness */
+  score({ stock, vel, hrs }) {
+    if (stock <= 0) return 3;
+    const left = stock - vel * hrs;
+    if (left <= 0) return 8;
+    const cover = 1 - Math.exp(-left / (vel * 2 + 1));
+    return Core.clamp(Math.round(100 * cover * Math.pow(0.985, hrs)), 0, 99);
+  },
+  band(s) { return s >= 80 ? { k: "ok", t: "✔ Confirmed" } : s >= 50 ? { k: "warn", t: "◐ Likely" } : { k: "bad", t: "⚠ Verify first" }; },
+  substitute(items, it) {
+    return items.filter(o => o.id !== it.id && o.cat === it.cat && Core.score(o) >= 80)
+      .sort((a, b) => Core.score(b) - Core.score(a))[0] || null;
+  },
+  BASE: { orders: 38500, cancel: .11, unavail: .35, aov: 486, tickets: 5900, missing: .19, acqLakh: 17 * .58, revLakh: 26.1 },
+  impact({ reduce, deflect, shift }) {
+    const B = Core.BASE, r = v => Core.clamp(Number(v) || 0, 0, 100) / 100;
+    const lost = Math.round(B.orders * B.cancel * B.unavail);
+    const recovered = Math.round(lost * r(reduce));
+    const revLakh = +(recovered * B.aov / 1e5).toFixed(2);
+    return { lost, recovered, revLakh, liftPct: +(revLakh / B.revLakh * 100).toFixed(1),
+      ticketsAvoided: Math.round(B.tickets * B.missing * r(deflect)), shiftedLakh: +(B.acqLakh * r(shift)).toFixed(2) };
+  }
+};
+const seed = () => [
+  { id: 1, name: "Milk 1L", store: "Sharma Kirana", cat: "Grocery", stock: 12, vel: 2, hrs: 1.5 },
+  { id: 2, name: "Paneer 200g", store: "Sharma Kirana", cat: "Grocery", stock: 5, vel: 1.2, hrs: 14 },
+  { id: 3, name: "Whole wheat bread", store: "Baker's Basket", cat: "Bakery", stock: 6, vel: 1.5, hrs: 9 },
+  { id: 4, name: "Multigrain bread", store: "Baker's Basket", cat: "Bakery", stock: 3, vel: .8, hrs: 30 },
+  { id: 5, name: "Millet cookies", store: "Baker's Basket", cat: "Bakery", stock: 8, vel: .3, hrs: 2 },
+  { id: 6, name: "Paracetamol strip", store: "HealthPlus Pharmacy", cat: "Pharmacy", stock: 4, vel: .5, hrs: 20 },
+  { id: 7, name: "A4 notebook", store: "Ganesh Stationers", cat: "Stationery", stock: 25, vel: .2, hrs: 40 },
+  { id: 8, name: "Gel pens (10 pack)", store: "Ganesh Stationers", cat: "Stationery", stock: 0, vel: .3, hrs: 5 }
+];
+const S = { items: seed(), cart: [], tab: "diag", sim: { reduce: 60, deflect: 50, shift: 20 } };
+
+/* ===== DOM helpers (textContent only => no injection) ===== */
+const $ = id => document.getElementById(id);
+const h = (t, a = {}, ...c) => { const e = document.createElement(t);
+  for (const [k, v] of Object.entries(a)) if (v != null) k.startsWith("on") ? e.addEventListener(k.slice(2), v) : e.setAttribute(k, v);
+  e.append(...c); return e; };
+const say = m => { $("live").textContent = m; };
+const badge = s => { const b = Core.band(s); return h("span", { class: `badge b-${b.k}` }, `${b.t} · ${s}%`); };
+const fill = (id, ...nodes) => { const el = $(id); el.replaceChildren(...nodes); };
+const ago = hrs => hrs < 1 ? "just now" : `${Math.round(hrs)}h ago`;
+
+/* ===== Views ===== */
+function diag() {
+  const li = (...t) => h("li", {}, ...t);
+  fill("s-diag", h("h2", { id: "h-diag" }, "1 · Diagnosis: growth is real, trust is leaking"),
+    h("div", { class: "card" }, h("p", {}, "NOVA CART's real problem is an ", h("b", {}, "availability-trust gap"), ": the app promises items that local stores can't confirm. Customers don't complain loudly, they just leave (61% of churned users had rated us 4★+)."),
+      h("ul", {}, li("Top cancellation reason: product unavailable, 35% of 11% cancels (≈1,480 orders/month)."),
+        li("29% of customers saw items vanish after ordering; 19% of support tickets are missing products; refunds are the #1 ticket type."),
+        li("39% of stores say inventory upkeep costs too much effort; 18% may leave; stock refreshes every 1–3 days at some stores."),
+        li("Repeat rate fell 41%→27% while promo spend rose ₹9.5L→₹17L: we are buying low-retention users."),
+        li("Customers who reach 3 orders retain at 72%, so a reliable first-2-orders experience is the lever."))),
+    h("div", { class: "grid" },
+      h("div", { class: "card" }, h("h3", {}, "Why not the other views?"), h("p", { class: "mut" }, "Marketing: more acquisition worsens a leaky bucket. Ops: delays are a symptom of cancels and re-dispatch. Availability sits upstream of cancels, refunds, tickets and churn.")),
+      h("div", { class: "card" }, h("h3", {}, "What we built"), h("p", { class: "mut" }, "Store: one-tap stock confirmation. Engine: confidence score per item. Customer: honest badges, pre-dispatch verification, smart substitutes. Impact tab: ₹ proof within the ₹25L budget.")),
+      h("div", { class: "card" }, h("h3", {}, "Prompt journey (key prompts)"), h("ol", {}, li("“Find contradictions in this case: what grows while quality falls?”"), li("“Trace each KPI to a root cause; rank by upstream position.”"), li("“Design the lowest-effort store input that restores trust.”"), li("“Challenge: is it a delivery or a data problem? What evidence disproves each?”")))));
+}
+function store() {
+  const sorted = [...S.items].sort((a, b) => Core.score(a) - Core.score(b));
+  fill("s-store", h("h2", { id: "h-store" }, "2 · Store console (needs-attention queue first)"),
+    h("p", { class: "mut" }, "A store owner clears this list in seconds: tap “Still have it” instead of editing a catalogue."),
+    ...sorted.map(it => { const sc = Core.score(it);
+      const qty = h("input", { type: "number", min: "0", max: "999", value: String(it.stock), id: `q${it.id}` });
+      return h("div", { class: "card" },
+        h("div", { class: "row" }, h("b", {}, it.name), h("span", { class: "mut" }, `${it.store} · confirmed ${ago(it.hrs)}`), badge(sc)),
+        h("div", { class: "bar", "aria-hidden": "true" }, h("i", { style: `width:${sc}%` })),
+        h("div", { class: "row", style: "margin-top:8px" },
+          h("button", { type: "button", class: "pri", "aria-label": `Confirm ${it.name} still in stock`, onclick() { it.hrs = 0; say(`${it.name} confirmed.`); render(); } }, "✔ Still have it"),
+          h("button", { type: "button", "aria-label": `Mark ${it.name} out of stock`, onclick() { it.stock = 0; it.hrs = 0; say(`${it.name} marked out of stock.`); render(); } }, "✖ Out"),
+          h("label", { for: `q${it.id}`, class: "mut" }, "Qty"), qty,
+          h("button", { type: "button", "aria-label": `Save quantity for ${it.name}`, onclick() { it.stock = Core.toInt(qty.value); it.hrs = 0; say(`${it.name} quantity set to ${it.stock}.`); render(); } }, "Save")));
+    }));
+}
+function cust() {
+  const inCart = id => S.cart.includes(id);
+  const cartItems = S.cart.map(id => S.items.find(i => i.id === id)).filter(Boolean);
+  const out = h("div", { id: "result" });
+  fill("s-cust", h("h2", { id: "h-cust" }, "3 · Customer view (honest availability)"),
+    ...S.items.map(it => { const sc = Core.score(it), dead = it.stock <= 0;
+      return h("div", { class: "card row" }, h("b", {}, it.name), h("span", { class: "mut" }, it.store), badge(sc),
+        h("button", { type: "button", disabled: dead || inCart(it.id) ? "" : null, onclick() { S.cart.push(it.id); say(`${it.name} added to cart.`); render(); } },
+          dead ? "Unavailable" : inCart(it.id) ? "In cart" : "Add"));
+    }),
+    h("div", { class: "card" }, h("h3", {}, `Cart (${cartItems.length})`),
+      h("button", { type: "button", class: "pri", disabled: cartItems.length ? null : "", onclick() { checkout(cartItems, out); } }, "Place order"), out));
+}
+function checkout(list, out) {
+  const msgs = list.map(it => { const sc = Core.score(it);
+    if (sc >= 80) return `${it.name}: store already confirmed, dispatching.`;
+    const sub = Core.substitute(S.items, it);
+    return `${it.name}: confidence ${sc}%. Pinged ${it.store} to verify before dispatch.` + (sub ? ` Backup ready: ${sub.name}.` : " No safe substitute; you'll be told before any charge.");
+  });
+  out.replaceChildren(...msgs.map(m => h("p", {}, m))); say("Order simulated. See verification notes.");
+}
+function impact() {
+  const r = Core.impact(S.sim);
+  const sl = (key, label) => { const id = `r-${key}`, o = h("output", { for: id }, `${S.sim[key]}%`);
+    const i = h("input", { type: "range", id, min: "0", max: "100", value: String(S.sim[key]), oninput() { S.sim[key] = Core.toInt(i.value, 0, 100); impact(); } });
+    return h("div", {}, h("label", { for: id }, label + " "), o, i); };
+  const k = (v, t) => h("div", { class: "card" }, h("div", { class: "kpi" }, v), h("div", { class: "mut" }, t));
+  fill("s-impact", h("h2", { id: "h-impact" }, "4 · Business impact simulator"),
+    h("div", { class: "card" }, sl("reduce", "Unavailability cancellations prevented"), sl("deflect", "Missing-item tickets deflected"), sl("shift", "Acquisition budget moved to retention")),
+    h("div", { class: "grid" },
+      k(r.lost.toLocaleString("en-IN"), "orders lost/month to unavailability (38,500 × 11% × 35%)"),
+      k(r.recovered.toLocaleString("en-IN"), "orders recovered/month"),
+      k(`₹${r.revLakh}L (+${r.liftPct}%)`, "extra monthly revenue vs ₹26.1L"),
+      k(r.ticketsAvoided.toLocaleString("en-IN"), "tickets avoided/month (5,900 × 19% missing-item)"),
+      k(`₹${r.shiftedLakh}L`, "monthly spend redirected from new-user acquisition (₹9.9L pool)")),
+    h("p", { class: "mut" }, "All inputs come from the case data; sliders are scenario assumptions. Build cost is a light store-app + scoring layer, well inside the ₹25L cap, with no warehouses or mass hiring."));
+}
+function tests() {
+  const T = [];
+  const t = (n, f) => T.push([n, f]); const eq = (a, b) => { if (a !== b) throw new Error(`${a} ≠ ${b}`); };
+  const base = { stock: 10, vel: 1, hrs: 0 };
+  t("zero stock scores very low", () => eq(Core.score({ ...base, stock: 0 }) <= 5, true));
+  t("score never rises as time passes", () => eq(Core.score({ ...base, hrs: 5 }) <= Core.score(base), true));
+  t("fresh well-stocked item is Confirmed", () => eq(Core.band(Core.score(base)).k, "ok"));
+  t("stale fast-selling item needs verification", () => eq(Core.band(Core.score({ stock: 5, vel: 2, hrs: 30 })).k, "bad"));
+  t("score bounded 0–99", () => eq([0, 5, 500].every(s => { const v = Core.score({ stock: s, vel: .1, hrs: 0 }); return v >= 0 && v <= 99; }), true));
+  t("toInt rejects junk and clamps", () => { eq(Core.toInt("abc"), 0); eq(Core.toInt(-4), 0); eq(Core.toInt(5000), 999); });
+  t("substitute is same category and confident", () => { const it = seed(), s = Core.substitute(it, it[3]); eq(s && s.cat, "Bakery"); });
+  t("substitute is null when none qualify", () => eq(Core.substitute(seed(), seed()[6]), null));
+  t("impact baseline matches case (1,482 lost orders)", () => eq(Core.impact({ reduce: 0, deflect: 0, shift: 0 }).lost, 1482));
+  t("impact scales linearly and clamps input", () => eq(Core.impact({ reduce: 500, deflect: 0, shift: 0 }).recovered, 1482));
+  t("seed data has unique ids", () => eq(new Set(seed().map(i => i.id)).size, seed().length));
+  return T.map(([n, f]) => { try { f(); return { n, ok: true }; } catch (e) { return { n, ok: false, e: e.message }; } });
+}
+function testsView() {
+  const res = tests();
+  fill("s-tests", h("h2", { id: "h-tests" }, "5 · Automated tests"),
+    h("table", {}, h("caption", { class: "mut" }, "Unit tests for the scoring, substitution, sanitising and impact logic"),
+      h("tbody", {}, ...res.map(r => h("tr", {}, h("td", { class: r.ok ? "pass" : "fail" }, r.ok ? "✔ PASS" : "✖ FAIL"), h("td", {}, r.n + (r.e ? ` (${r.e})` : "")))))),
+    h("h3", {}, "Quality notes"), h("ul", {},
+      h("li", {}, "Logic isolated in pure `Core`; views never mutate scores directly."),
+      h("li", {}, "Security: strict CSP, DOM built with textContent only, all numeric input validated and clamped."),
+      h("li", {}, "Efficiency: zero dependencies, one file, tiny DOM re-renders."),
+      h("li", {}, "Accessibility: skip link, labelled controls, 44px targets, status text beyond colour, live announcements, dark mode, reduced motion."),
+      h("li", {}, "Google services: Google Fonts; roadmap: Firebase for store sync, Gemini for catalogue-gap hints.")));
+  return res;
+}
+const TABS = [["diag", "Diagnosis"], ["store", "Store"], ["cust", "Customer"], ["impact", "Impact"], ["tests", "Tests"]];
+function render() {
+  fill("nav", ...TABS.map(([k, l]) => h("button", { type: "button", ...(S.tab === k ? { "aria-current": "page" } : {}), onclick() { S.tab = k; render(); $("main").focus(); } }, l)));
+  TABS.forEach(([k]) => { $("s-" + k).hidden = S.tab !== k; });
+  ({ diag, store, cust, impact })[S.tab]?.();
+  const res = testsView(), p = res.filter(r => r.ok).length;
+  const tb = $("tests-badge"); tb.textContent = `Tests ${p}/${res.length} passing`; tb.className = "badge " + (p === res.length ? "b-ok" : "b-bad");
+}
+$("ff").addEventListener("click", () => { S.items.forEach(i => { i.hrs += 3; }); say("Advanced 3 hours. Confidence scores decayed."); render(); });
+$("reset").addEventListener("click", () => { S.items = seed(); S.cart = []; say("Demo reset."); render(); });
+render();
+</script></body></html>
